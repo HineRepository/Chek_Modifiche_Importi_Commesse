@@ -100,9 +100,9 @@ def main():
                 data_modifica = record.get('data_modifica')
 
                 # Salva solo se rispettate tutte e 3 le condizioni:
-                # Condizione 1: la data di stampa fattura deve essere precedente (più vecchia) alla data dell'ultima modifica (che sarà più recente)
-                # Condizione 2: importo_ultimo_log < importo_penultimo_log (così capiamo se hanno tolto soldi dopo la stampa)
-                # Condizione 3: la differenza tra data_modifica e data_stampa_fattura deve essere > 60 secondi (range di tempo accettabile)
+                # Condizione 1: la data di stampa fattura deve essere precedente alla data dell'ultima modifica. (cioè la stampa è avvenuta prima dell’ultima modifica)
+                # Condizione 2: importo_ultimo_log < importo_penultimo_log (cioè l’importo dopo la stampa è stato ridotto)
+                # Condizione 3: la differenza tra data_modifica e data_stampa_fattura deve essere > 30 secondi (range di tempo accettabile)
                 if (
                     data_stampa and data_modifica and data_stampa < data_modifica
                     and importo_ultimo_log is not None and importo_penultimo_log is not None

@@ -22,8 +22,7 @@ Session = sessionmaker(bind=engine)
 @app.route('/')
 def index():
     session = Session()
-    # Recupera i dati più recenti (limite 200 per velocità)
-    records = session.query(StoricoModificheFatture).order_by(StoricoModificheFatture.id.desc()).limit(200).all()
+    records = session.query(StoricoModificheFatture).order_by(StoricoModificheFatture.id.desc()).all()
     session.close()
     return render_template('index.html', records=records)
 
