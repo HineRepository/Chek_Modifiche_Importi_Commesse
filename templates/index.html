@@ -24,15 +24,21 @@
                 {% for utente, count in utenti_count.items() %}
                     <tr><td>{{ utente }}</td><td>{{ count }}</td></tr>
                 {% endfor %}
+                <tr class="table-secondary fw-bold"><td>TOTALE</td><td>{{ totale_record }}</td></tr>
+                <tr class="table-warning fw-bold"><td>Totale soldi spariti</td><td>{{ '%.2f'|format(totale_soldi_spariti) }} &euro;</td></tr>
                 </tbody>
             </table>
         </div>
         <div class="col-lg-10 col-md-9 col-12">
-            <h2>Storico Modifiche Fatture</h2>
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h2 class="mb-0">Storico Modifiche Fatture</h2>
+                <a href="/export" class="btn btn-success">Esporta CSV</a>
+            </div>
             <table class="table table-bordered table-hover align-middle w-100">
                 <thead class="table-light">
                     <tr>
                         <th>ID Fattura</th>
+                        <th>Azienda</th>
                         <th>Importo stampato<br/>in fattura</th>
                         <th>Importo modificato dopo <br/>la stampa della fattura</th>
                         <th>Data stampa fattura</th>
@@ -45,6 +51,7 @@
                 {% for rec in records %}
                     <tr data-bs-toggle="collapse" data-bs-target="#details{{ rec.id }}" aria-expanded="false" style="cursor:pointer;">
                         <td class="highlight">{{ rec.id_documento }}</td>
+                        <td class="highlight">{{ rec.azienda }}</td>
                         <td class="highlight importo-wrap">{{ rec.importo_penultimo_log }} &euro;</td>
                         <td class="highlight importo-wrap">{{ rec.importo_ultimo_log }} &euro;</td>
                                     <td class="highlight">
