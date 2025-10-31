@@ -23,8 +23,13 @@ Session = sessionmaker(bind=engine)
 def index():
     session = Session()
     records = session.query(StoricoModificheFatture).order_by(StoricoModificheFatture.id.desc()).all()
+    # Calcola il conteggio dei record per utente
+    utenti_count = {}
+    for rec in records:
+        utente = rec.utente or 'N/D'
+        utenti_count[utente] = utenti_count.get(utente, 0) + 1
     session.close()
-    return render_template('index.html', records=records)
+    return render_template('index.html', records=records, utenti_count=utenti_count)
 
 if __name__ == '__main__':
     app.run(debug=True)
