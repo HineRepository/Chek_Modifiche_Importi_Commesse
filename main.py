@@ -109,7 +109,7 @@ def main():
                     and importo_ultimo_log < importo_penultimo_log
                 ):
                     delta_sec = (data_modifica - data_stampa).total_seconds()
-                    if delta_sec > 60:
+                    if delta_sec > 30:
 
                         print(f"[INFO] Salvo documento {record.get('id_documento')} azienda {azienda} (log: {idx+1}) | importo_ultimo_log: {importo_ultimo_log} | importo_penultimo_log: {importo_penultimo_log} | delta_sec: {delta_sec}")
 
