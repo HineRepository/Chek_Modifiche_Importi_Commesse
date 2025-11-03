@@ -111,8 +111,9 @@ def export():
     session.close()
     # Colonne come nella tabella index
     columns = [
-        'ID Fattura',
+        'ID Documento',
         'Azienda',
+        'Anno',
         'Importo stampato in fattura',
         'Importo modificato dopo la stampa della fattura',
         'Data stampa fattura',
@@ -122,8 +123,9 @@ def export():
     data = []
     for rec in records:
         data.append({
-            'ID Fattura': rec.id_documento,
+            'ID Documento': rec.id_documento,
             'Azienda': rec.azienda or '',
+            'Anno': rec.anno or '',
             'Importo stampato in fattura': f"{rec.importo_penultimo_log} €" if rec.importo_penultimo_log is not None else '',
             'Importo modificato dopo la stampa della fattura': f"{rec.importo_ultimo_log} €" if rec.importo_ultimo_log is not None else '',
             'Data stampa fattura': f"{rec.data_stampa_fattura.strftime('%d-%m-%Y')} - {rec.data_stampa_fattura.strftime('%H:%M')}" if rec.data_stampa_fattura else '',
