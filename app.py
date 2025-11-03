@@ -1,12 +1,14 @@
-from flask import Flask, render_template, send_file, request
+from flask import Flask, render_template, send_file, request, redirect, url_for, flash
 import io
 import pandas as pd
+import subprocess
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import StoricoModificheFatture
 import configparser
 
 app = Flask(__name__)
+app.secret_key = 'your_secret_key' # Per flask o rompe le scatole
 
 # Carica la configurazione
 config = configparser.ConfigParser()
@@ -24,7 +26,13 @@ Session = sessionmaker(bind=engine)
 @app.route('/')
 def index():
     session = Session()
-    records = session.query(StoricoModificheFatture).order_by(StoricoModificheFatture.id.desc()).all()
+    # Lista aziende distinte
+    aziende = [row[0] for row in session.query(StoricoModificheFatture.azienda).distinct().order_by(StoricoModificheFatture.azienda)]
+    azienda_filtro = request.args.get('azienda', default=None, type=str)
+    query = session.query(StoricoModificheFatture)
+    if azienda_filtro and azienda_filtro != 'TUTTE':
+        query = query.filter(StoricoModificheFatture.azienda == azienda_filtro)
+    records = query.order_by(StoricoModificheFatture.id.desc()).all()
     # Calcola il conteggio dei record per utente
     utenti_count = {}
     totale_soldi_spariti = 0.0
@@ -39,8 +47,60 @@ def index():
         except Exception:
             pass
     totale_record = sum(utenti_count.values())
+    # Totali per azienda (solo se nessun filtro attivo)
+    totali_per_azienda = []
+    if not azienda_filtro or azienda_filtro == 'TUTTE':
+        for az in aziende:
+            if not az:
+                continue
+            recs_az = [r for r in session.query(StoricoModificheFatture).filter(StoricoModificheFatture.azienda == az).all()]
+            count_az = len(recs_az)
+            soldi_az = 0.0
+            for r in recs_az:
+                try:
+                    if r.importo_penultimo_log is not None and r.importo_ultimo_log is not None:
+                        diff = float(r.importo_penultimo_log) - float(r.importo_ultimo_log)
+                        if diff > 0:
+                            soldi_az += diff
+                except Exception:
+                    pass
+            totali_per_azienda.append({'azienda': az, 'record': count_az, 'soldi': soldi_az})
     session.close()
-    return render_template('index.html', records=records, utenti_count=utenti_count, totale_record=totale_record, totale_soldi_spariti=totale_soldi_spariti)
+    return render_template(
+        'index.html',
+        records=records,
+        utenti_count=utenti_count,
+        totale_record=totale_record,
+        totale_soldi_spariti=totale_soldi_spariti,
+        aziende=aziende,
+        azienda_filtro=azienda_filtro,
+        totali_per_azienda=totali_per_azienda
+    )
+
+
+# Route per svuotare la tabella
+@app.route('/clear-table', methods=['POST'])
+def clear_table():
+    session = Session()
+    session.query(StoricoModificheFatture).delete()
+    session.commit()
+    session.close()
+    flash('Tabella svuotata con successo!', 'success')
+    return redirect(url_for('index'))
+
+# Route per avviare lo script main.py
+@app.route('/run-script', methods=['POST'])
+def run_script():
+    try:
+        # Avvia main.py come sottoprocesso
+        result = subprocess.run(['python', 'main.py'], capture_output=True, text=True, cwd='.')
+        if result.returncode == 0:
+            flash('Script eseguito con successo!', 'success')
+        else:
+            flash(f'Errore nell\'esecuzione dello script: {result.stderr}', 'danger')
+    except Exception as e:
+        flash(f'Errore: {e}', 'danger')
+    return redirect(url_for('index'))
 
 
 # Route per esportazione CSV

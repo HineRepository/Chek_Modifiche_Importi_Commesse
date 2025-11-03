@@ -15,6 +15,15 @@
 <div class="container-fluid mt-3">
     <div class="row">
         <div class="col-lg-2 col-md-3 col-12 mb-3">
+            <form method="get" action="/">
+                <label for="azienda" class="form-label">Filtro azienda:</label>
+                <select name="azienda" id="azienda" class="form-select mb-2" onchange="this.form.submit()">
+                    <option value="TUTTE" {% if not azienda_filtro or azienda_filtro == 'TUTTE' %}selected{% endif %}>Tutte le aziende</option>
+                    {% for az in aziende %}
+                        <option value="{{ az }}" {% if azienda_filtro == az %}selected{% endif %}>{{ az }}</option>
+                    {% endfor %}
+                </select>
+            </form>
             <h5>Utenti e conteggio record</h5>
             <table class="table table-sm table-bordered mb-0">
                 <thead class="table-light">
@@ -25,15 +34,41 @@
                     <tr><td>{{ utente }}</td><td>{{ count }}</td></tr>
                 {% endfor %}
                 <tr class="table-secondary fw-bold"><td>TOTALE</td><td>{{ totale_record }}</td></tr>
-                <tr class="table-warning fw-bold"><td>Totale soldi spariti</td><td>{{ '%.2f'|format(totale_soldi_spariti) }} &euro;</td></tr>
+                <tr class="table-warning fw-bold"><td>Totale soldi spariti</td><td>{{ '{:,.2f}'.format(totale_soldi_spariti).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
+                {% if totali_per_azienda is defined and totali_per_azienda and (not azienda_filtro or azienda_filtro == 'TUTTE') %}
+                    <tr><td colspan="2"><strong>Totali per azienda</strong></td></tr>
+                    {% for az in totali_per_azienda %}
+                        <tr><td>{{ az.azienda }}</td><td>{{ az.record }} record<br>{{ '{:,.2f}'.format(az.soldi).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
+                    {% endfor %}
+                {% endif %}
                 </tbody>
             </table>
         </div>
         <div class="col-lg-10 col-md-9 col-12">
             <div class="d-flex justify-content-between align-items-center mb-2">
                 <h2 class="mb-0">Storico Modifiche Fatture</h2>
-                <a href="/export" class="btn btn-success">Esporta CSV</a>
+                <div class="d-flex gap-2">
+                    <a href="/export" class="btn btn-success">Esporta CSV</a>
+                    <form method="post" action="/clear-table" onsubmit="return confirm('Sicuro di voler svuotare la tabella?');">
+                        <button type="submit" class="btn btn-danger">Svuota Tabella</button>
+                    </form>
+                    <form method="post" action="/run-script">
+                        <button type="submit" class="btn btn-primary">Esegui Script</button>
+                    </form>
+                </div>
             </div>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    <div class="mb-2">
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                            </div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
             <table class="table table-bordered table-hover align-middle w-100">
                 <thead class="table-light">
                     <tr>
@@ -52,23 +87,23 @@
                     <tr data-bs-toggle="collapse" data-bs-target="#details{{ rec.id }}" aria-expanded="false" style="cursor:pointer;">
                         <td class="highlight">{{ rec.id_documento }}</td>
                         <td class="highlight">{{ rec.azienda }}</td>
-                        <td class="highlight importo-wrap">{{ rec.importo_penultimo_log }} &euro;</td>
-                        <td class="highlight importo-wrap">{{ rec.importo_ultimo_log }} &euro;</td>
-                                    <td class="highlight">
-                                        {% if rec.data_stampa_fattura %}
-                                            {{ rec.data_stampa_fattura.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_stampa_fattura.strftime('%H:%M') }}
-                                        {% endif %}
-                                    </td>
-                                    <td class="highlight">
-                                        {% if rec.data_modifica %}
-                                            {{ rec.data_modifica.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_modifica.strftime('%H:%M') }}
-                                        {% endif %}
-                                    </td>
+                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_penultimo_log).replace(',', ' ').replace('.', ',') if rec.importo_penultimo_log is not none else '' }} &euro;</td>
+                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_ultimo_log).replace(',', ' ').replace('.', ',') if rec.importo_ultimo_log is not none else '' }} &euro;</td>
+                        <td class="highlight">
+                            {% if rec.data_stampa_fattura %}
+                                {{ rec.data_stampa_fattura.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_stampa_fattura.strftime('%H:%M') }}
+                            {% endif %}
+                        </td>
+                        <td class="highlight">
+                            {% if rec.data_modifica %}
+                                {{ rec.data_modifica.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_modifica.strftime('%H:%M') }}
+                            {% endif %}
+                        </td>
                         <td class="highlight">{{ rec.utente }}</td>
                         <td><span class="badge bg-info">Dettagli</span></td>
                     </tr>
                     <tr class="collapse collapse-row" id="details{{ rec.id }}">
-                        <td colspan="5">
+                        <td colspan="8">
                             <div>
                                 <strong>Azienda:</strong> {{ rec.azienda }}<br>
                                 <strong>Anno:</strong> {{ rec.anno }}<br>
