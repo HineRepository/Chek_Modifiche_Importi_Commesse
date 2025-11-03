@@ -135,13 +135,15 @@ def export():
     df.to_csv(output, index=False, sep=';')
     # Riga vuota
     output.write('\n')
-    # Tabella utenti
-    output.write('Utente;Numero record\n')
-    utenti_count = {}
+    # Tabella utenti per azienda
+    utenti_per_azienda = {}
     totale_soldi_spariti = 0.0
     for rec in records:
+        azienda = rec.azienda or 'N/D'
         utente = rec.utente or 'N/D'
-        utenti_count[utente] = utenti_count.get(utente, 0) + 1
+        if azienda not in utenti_per_azienda:
+            utenti_per_azienda[azienda] = {}
+        utenti_per_azienda[azienda][utente] = utenti_per_azienda[azienda].get(utente, 0) + 1
         try:
             if rec.importo_penultimo_log is not None and rec.importo_ultimo_log is not None:
                 diff = float(rec.importo_penultimo_log) - float(rec.importo_ultimo_log)
@@ -149,11 +151,42 @@ def export():
                     totale_soldi_spariti += diff
         except Exception:
             pass
-    totale_record = sum(utenti_count.values())
-    for utente, count in utenti_count.items():
-        output.write(f'{utente};{count}\n')
-    output.write(f'TOTALE;{totale_record}\n')
-    output.write(f'Totale soldi spariti;{totale_soldi_spariti:.2f} €\n')
+    
+    # Scrivi utenti per azienda
+    for azienda in sorted(utenti_per_azienda.keys()):
+        output.write(f'Azienda: {azienda}\n')
+        output.write('Utente;Numero record\n')
+        utenti_azienda = utenti_per_azienda[azienda]
+        totale_azienda = sum(utenti_azienda.values())
+        for utente, count in utenti_azienda.items():
+            output.write(f'{utente};{count}\n')
+        output.write(f'TOTALE {azienda};{totale_azienda}\n')
+        output.write('\n')
+    
+    # Totale generale
+    totale_record = sum(sum(utenti.values()) for utenti in utenti_per_azienda.values())
+    output.write(f'TOTALE GENERALE;{totale_record}\n')
+    output.write(f'Totale soldi mancanti;{totale_soldi_spariti:.2f} €\n')
+    # Riga vuota
+    output.write('\n')
+    # Tabella aziende
+    output.write('Azienda;Numero record;Soldi mancanti\n')
+    aziende_count = {}
+    aziende_soldi = {}
+    for rec in records:
+        azienda = rec.azienda or 'N/D'
+        aziende_count[azienda] = aziende_count.get(azienda, 0) + 1
+        try:
+            if rec.importo_penultimo_log is not None and rec.importo_ultimo_log is not None:
+                diff = float(rec.importo_penultimo_log) - float(rec.importo_ultimo_log)
+                if diff > 0:
+                    aziende_soldi[azienda] = aziende_soldi.get(azienda, 0.0) + diff
+        except Exception:
+            pass
+    for azienda in sorted(aziende_count.keys()):
+        count = aziende_count[azienda]
+        soldi = aziende_soldi.get(azienda, 0.0)
+        output.write(f'{azienda};{count};{soldi:.2f} €\n')
     output.seek(0)
     return send_file(
         io.BytesIO(output.getvalue().encode('utf-8-sig')),

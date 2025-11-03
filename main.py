@@ -99,17 +99,19 @@ def main():
                 data_stampa = record.get('data_stampa_fattura')
                 data_modifica = record.get('data_modifica')
 
-                # Salva solo se rispettate tutte e 3 le condizioni:
-                # Condizione 1: la data di stampa fattura deve essere precedente alla data dell'ultima modifica. (cioè la stampa è avvenuta prima dell’ultima modifica)
-                # Condizione 2: importo_ultimo_log < importo_penultimo_log (cioè l’importo dopo la stampa è stato ridotto)
+                # Salva solo se rispettate tutte le condizioni:
+                # Condizione 1: la data di stampa fattura deve essere precedente alla data dell'ultima modifica. (cioè la stampa è avvenuta prima dell'ultima modifica)
+                # Condizione 2: importo_ultimo_log < importo_penultimo_log (cioè l'importo dopo la stampa è stato ridotto)
                 # Condizione 3: la differenza tra data_modifica e data_stampa_fattura deve essere > 30 secondi (range di tempo accettabile)
+                # Condizione 4: importo_ultimo_log > 0 (non salvare record con importo modificato a 0)
                 if (
                     data_stampa and data_modifica and data_stampa < data_modifica
                     and importo_ultimo_log is not None and importo_penultimo_log is not None
                     and importo_ultimo_log < importo_penultimo_log
+                    and importo_ultimo_log > 0
                 ):
                     delta_sec = (data_modifica - data_stampa).total_seconds()
-                    if delta_sec > 30:
+                    if delta_sec > 60:
 
                         print(f"[INFO] Salvo documento {record.get('id_documento')} azienda {azienda} (log: {idx+1}) | importo_ultimo_log: {importo_ultimo_log} | importo_penultimo_log: {importo_penultimo_log} | delta_sec: {delta_sec}")
 

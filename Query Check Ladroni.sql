@@ -32,7 +32,7 @@ WHERE
 	storico_modifiche.nome_tabella='tdo_cli' 
 	AND note like '%ivato%'
 	and cli.cond_pag ='205' --pagamento in contanti
-	and cli.anno=2025
+	and cli.anno>=2024
 order by
    cli.id_documento,
    storico_modifiche.data_operazione 

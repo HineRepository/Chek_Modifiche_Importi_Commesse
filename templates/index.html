@@ -34,7 +34,7 @@
                     <tr><td>{{ utente }}</td><td>{{ count }}</td></tr>
                 {% endfor %}
                 <tr class="table-secondary fw-bold"><td>TOTALE</td><td>{{ totale_record }}</td></tr>
-                <tr class="table-warning fw-bold"><td>Totale soldi spariti</td><td>{{ '{:,.2f}'.format(totale_soldi_spariti).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
+                <tr class="table-warning fw-bold"><td>Totale soldi: </td><td>{{ '{:,.2f}'.format(totale_soldi_spariti).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
                 {% if totali_per_azienda is defined and totali_per_azienda and (not azienda_filtro or azienda_filtro == 'TUTTE') %}
                     <tr><td colspan="2"><strong>Totali per azienda</strong></td></tr>
                     {% for az in totali_per_azienda %}
@@ -72,7 +72,7 @@
             <table class="table table-bordered table-hover align-middle w-100">
                 <thead class="table-light">
                     <tr>
-                        <th>ID Fattura</th>
+                        <th>ID Documento</th>
                         <th>Azienda</th>
                         <th>Importo stampato<br/>in fattura</th>
                         <th>Importo modificato dopo <br/>la stampa della fattura</th>
