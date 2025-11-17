@@ -23,7 +23,9 @@ class StoricoModificheFatture(Base):
     tipo_operazione = Column(String(50))
     note = Column(String(255))
     data_modifica = Column(DateTime)
-    data_stampa_fattura = Column(DateTime)
     azienda = Column(String(10))
-    importo_ultimo_log = Column(DECIMAL(18, 2))
-    importo_penultimo_log = Column(DECIMAL(18, 2))
+    importo_modifica = Column(DECIMAL(18, 2)) # Log 
+    importo_fattura = Column(DECIMAL(18, 2)) # XML: importo totale documento - spesa materiale consumo
+    id_reg_pd = Column(Integer) # ID registro PD
+    data_trasmissione_fattura = Column(DateTime) # Query recupero fattura
+    targa = Column(String(20)) # Targa veicolo

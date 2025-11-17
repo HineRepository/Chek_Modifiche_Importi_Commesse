@@ -1,6 +1,7 @@
 import configparser
 import re
 import pyodbc
+import xml.etree.ElementTree as ET
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import StoricoModificheFatture, Base
@@ -42,6 +43,77 @@ def extract_importo(note):
             return None
     return None
 
+def extract_importo_from_xml(xml_content):
+    """
+    Estrae l'importo effettivo della fattura elettronica dal file XML.
+    Logica:
+    - Prende il valore di <ImportoTotaleDocumento> (importo totale della fattura)
+    - Sottrae la somma delle righe <DettaglioLinee> che hanno <Descrizione> contenente 'Spesa Materiale consumo'.
+      (Queste sono spese che vanno escluse dal totale per ottenere l'importo "vero" della commessa)
+    - Restituisce il risultato arrotondato a due decimali.
+    Parametri:
+        xml_content: stringa XML (o bytes) della fattura elettronica
+    Ritorna:
+        float: importo effettivo (ImportoTotaleDocumento - somma Spesa Materiale consumo), oppure None se errore
+    """
+    if not xml_content or not isinstance(xml_content, (str, bytes)):
+        return None
+    try:
+        # Se il contenuto è bytes, decodifica in stringa
+        if isinstance(xml_content, bytes):
+            xml_content = xml_content.decode('utf-8', errors='ignore')
+        root = ET.fromstring(xml_content)
+        
+        # Cerca il tag <ImportoTotaleDocumento> (importo totale della fattura)
+        importo_totale = root.find('.//ImportoTotaleDocumento')
+        importo_totale_val = float(importo_totale.text) if importo_totale is not None else 0.0
+        
+        # Cerca tutte le righe <DettaglioLinee> e somma i valori di <PrezzoTotale>
+        # solo se la <Descrizione> contiene 'Spesa Materiale consumo'
+        spesa_materiale = 0.0
+        for dettaglio in root.findall('.//DettaglioLinee'):
+            descrizione = dettaglio.find('Descrizione')
+            if descrizione is not None and 'Spesa Materiale consumo' in descrizione.text:
+                prezzo_totale = dettaglio.find('PrezzoTotale')
+                if prezzo_totale is not None:
+                    spesa_materiale += float(prezzo_totale.text)
+        # Calcola l'importo effettivo: totale - spese materiale consumo
+        risultato = round(importo_totale_val - spesa_materiale, 2)
+        print(f"[DEBUG XML] ImportoTotale={importo_totale_val}, SpesaMateriale={spesa_materiale}, Risultato={risultato}")
+        return risultato
+    except Exception as e:
+        print(f"[WARNING] Errore nel parsing XML: {e}")
+        return None
+
+def get_fattura_data(odbc_conn_str, id_reg_pd):
+    """
+    Recupera i dati della fattura (data trasmissione e importo dal XML) dato l'id_reg_pd
+    """
+    if not id_reg_pd or id_reg_pd <= 0:
+        return None, None
+    
+    # Carica la query dal file SQL
+    query_fattura = open('Query Recupero Fattura.sql', encoding='utf-8').read()
+    
+    try:
+        with pyodbc.connect(odbc_conn_str) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query_fattura, id_reg_pd)
+            row = cursor.fetchone()
+            if row:
+                # La query restituisce: id_reg_pd, fine_trasmissione, nome_file, file_xml_vendita
+                data_trasmissione = row[1]  # fine_trasmissione (datetime)
+                xml_content = row[3]  # file_xml_vendita (XML string)
+                importo_fattura = extract_importo_from_xml(xml_content)
+                print(f"[DEBUG] id_reg_pd {id_reg_pd}: data_trasmissione={data_trasmissione}, importo_fattura={importo_fattura}")
+                return data_trasmissione, importo_fattura
+            else:
+                print(f"[DEBUG] id_reg_pd {id_reg_pd}: Nessun risultato dalla query (fattura non trasmessa?)")
+    except Exception as e:
+        print(f"[WARNING] Errore nel recupero dati fattura per id_reg_pd {id_reg_pd}: {e}")
+    
+    return None, None
+
 # Funzione per estrarre dati dal DNS e connettersi a Infinity
 def estrai_dati_da_dsn(dsn_str):
     dsn_parts = dsn_str.split('^')
@@ -51,7 +123,9 @@ def estrai_dati_da_dsn(dsn_str):
     password_source = dsn_parts[3] if len(dsn_parts) > 3 else ''
     odbc_conn_str = f"DSN={dsn_name};UID={username_source};PWD={password_source}"
     print(f"\n[INFO] Connessione a sorgente azienda: {azienda} (DSN: {dsn_name}) ...")
-    query = open('Query Check Ladroni.sql', encoding='utf-8').read()
+    query = open('Query Check Log Commesse.sql', encoding='utf-8').read()
+    
+    results = []
     with pyodbc.connect(odbc_conn_str) as conn:
         cursor = conn.cursor()
         cursor.execute(query)
@@ -59,90 +133,119 @@ def estrai_dati_da_dsn(dsn_str):
         rows = cursor.fetchall()
         print(f"[INFO] Trovati {len(rows)} record per azienda {azienda}.")
         for row in rows:
-            yield azienda, dict(zip(columns, row))
-
+            results.append((azienda, odbc_conn_str, dict(zip(columns, row))))
+    
+    return results
 
 
 
 def main():
 
-    print("[INFO] Avvio script di estrazione e salvataggio dati\n")
-    session = Session()
-    source_conf = config['SOURCE_INFINITY']
-    dsn_list = [dsn.strip() for dsn in source_conf['dsn'].split(',') if dsn.strip()]
-    totale = 0
+    """
+    Script principale per il controllo delle modifiche importi commesse.
 
+    Funzionalità:
+    - Estrae i log delle modifiche da Infinity tramite query SQL.
+    - Per ogni log, recupera la data di trasmissione e l'importo fattura dal file XML associato.
+    - Salva nel database tutti i dati rilevanti, compresi importi log, importo fattura, targa, ecc.
+    - Stampa dettagliate informazioni di debug per ogni step.
+
+    Dipendenze: pyodbc, sqlalchemy, configparser
+    Configurazione: vedi config.ini per parametri di connessione.
+    """
+    # Avvio script e creazione sessione DB
+    print("[INFO] Avvio script di estrazione e salvataggio dati\n")
+    session = Session()  # Crea una nuova sessione SQLAlchemy per il database
+    source_conf = config['SOURCE_INFINITY']  # Legge la sezione di configurazione per le sorgenti Infinity
+    dsn_list = [dsn.strip() for dsn in source_conf['dsn'].split(',') if dsn.strip()]  # Lista dei DSN configurati
+    totale = 0  # Contatore dei record salvati
+
+    # Ciclo su ogni DSN (azienda/sorgente)
     for dsn_str in dsn_list:
         print(f"[INFO] Inizio elaborazione per DSN: {dsn_str}")
 
-        # Raggruppa tutti i record per id_documento per calcolare importi log
-        records_per_doc = {}
-        for azienda, record in estrai_dati_da_dsn(dsn_str):
-            id_doc = record.get('id_documento')
-            if id_doc not in records_per_doc:
-                records_per_doc[id_doc] = []
-            records_per_doc[id_doc].append((azienda, record))
+        records = estrai_dati_da_dsn(dsn_str)  # Estrae tutti i log per questo DSN (azienda)
+        print(f"[DEBUG] Numero record estratti da DSN {dsn_str}: {len(records)}")
+        for idx, (azienda, odbc_conn_str, record) in enumerate(records):
+            # Stampa info base su ogni record
+            print(f"[DEBUG] [{idx+1}/{len(records)}] id_documento={record.get('id_documento')} id_reg_pd={record.get('id_reg_pd')}")
+            id_reg_pd = record.get('id_reg_pd')
+            # Verifica che la commessa sia stata fatturata (id_reg_pd > 0)
+            if not id_reg_pd or id_reg_pd <= 0:
+                print(f"[DEBUG]   -> SKIP: id_reg_pd mancante o <= 0")
+                continue
+            # Recupera dati fattura (data trasmissione e importo fattura)
+            data_trasmissione, importo_fattura = get_fattura_data(odbc_conn_str, id_reg_pd)
+            if not data_trasmissione:
+                print(f"[DEBUG]   -> SKIP: data_trasmissione non trovata per id_reg_pd={id_reg_pd}")
+                continue
+            data_modifica = record.get('data_modifica')
+            # Funzione di utilità per convertire vari formati data in datetime
+            def parse_data(val):
+                if not val:
+                    return None
+                if isinstance(val, datetime):
+                    return val
+                s = str(val)
+                try:
+                    return datetime.fromisoformat(s)
+                except Exception:
+                    pass
+                if s.isdigit() and len(s) == 8:
+                    try:
+                        return datetime.strptime(s, '%Y%m%d')
+                    except Exception:
+                        pass
+                return None
+            data_modifica = parse_data(data_modifica)
+            data_trasmissione = parse_data(data_trasmissione)
+            # Controlla validità delle date
+            if not data_modifica:
+                print(f"[DEBUG]   -> SKIP: data_modifica non valida: {record.get('data_modifica')}")
+                continue
+            if not data_trasmissione:
+                print(f"[DEBUG]   -> SKIP: data_trasmissione non valida: {data_trasmissione}")
+                continue
+            if data_modifica >= data_trasmissione:
+                print(f"[DEBUG]   -> SKIP: data_modifica >= data_trasmissione ({data_modifica} >= {data_trasmissione})")
+                continue
+            # Estrai importo log dalle note
+            importo_log = extract_importo(record.get('note'))
+            if importo_log is None:
+                print(f"[DEBUG]   -> SKIP: importo_log non trovato nelle note")
+                continue
+            # Salva il record nel database
+            print(f"[INFO] Salvo log per id_documento {record.get('id_documento')}, id_reg_pd {id_reg_pd}, azienda {azienda} | importo_log: {importo_log}")
+            nuovo_record = StoricoModificheFatture(
+                id_documento=record.get('id_documento'),
+                anno=record.get('anno'),
+                id_cliente=record.get('id_cliente'),
+                tipo_doc=record.get('tipo_doc'),
+                data_doc=record.get('data_doc'),
+                num_doc=record.get('num_doc'),
+                tipo_fattura=record.get('tipo_fattura'),
+                data_fattura=record.get('data_fattura'),
+                numero_fattura=record.get('numero_fattura'),
+                tipo_pagamento=record.get('tipo_pagamento'),
+                id_hst=record.get('id_hst'),
+                nome_tabella=record.get('nome_tabella'),
+                utente=record.get('utente'),
+                tipo_operazione=record.get('tipo_operazione'),
+                note=record.get('note'),
+                data_modifica=data_modifica,
+                azienda=azienda,
+                importo_modifica=importo_log,
+                importo_fattura=importo_fattura,
+                id_reg_pd=id_reg_pd,
+                data_trasmissione_fattura=data_trasmissione,
+                targa=record.get('targa')
+            )
+            session.add(nuovo_record)  # Aggiunge il record alla sessione
+            session.commit()           # Salva subito il record nel database
+            print("[DEBUG] Commit eseguito per questo record")
+            totale += 1  # Incrementa il contatore dei record salvati
 
-        print(f"[INFO] Trovati {len(records_per_doc)} gruppi di documenti per DSN {dsn_str}.")
-
-        # Per ogni gruppo di log con stesso id_documento
-        for id_doc, recs in records_per_doc.items():
-            # Ordina i log per data_modifica decrescente (dal più recente al meno)
-            recs_sorted = sorted(recs, key=lambda x: x[1].get('data_modifica') or '', reverse=True)
-
-            # Estrai importo dell'ultimo e penultimo log dalle note
-            importo_ultimo_log = extract_importo(recs_sorted[0][1].get('note')) if len(recs_sorted) > 0 else None
-            importo_penultimo_log = extract_importo(recs_sorted[1][1].get('note')) if len(recs_sorted) > 1 else None
-
-            # Cicla su tutti i log ordinati (in pratica salva solo il primo se rispetta i criteri)
-            for idx, (azienda, record) in enumerate(recs_sorted):
-                data_stampa = record.get('data_stampa_fattura')
-                data_modifica = record.get('data_modifica')
-
-                # Salva solo se rispettate tutte le condizioni:
-                # Condizione 1: la data di stampa fattura deve essere precedente alla data dell'ultima modifica. (cioè la stampa è avvenuta prima dell'ultima modifica)
-                # Condizione 2: importo_ultimo_log < importo_penultimo_log (cioè l'importo dopo la stampa è stato ridotto)
-                # Condizione 3: la differenza tra data_modifica e data_stampa_fattura deve essere > 30 secondi (range di tempo accettabile)
-                # Condizione 4: importo_ultimo_log > 0 (non salvare record con importo modificato a 0)
-                if (
-                    data_stampa and data_modifica and data_stampa < data_modifica
-                    and importo_ultimo_log is not None and importo_penultimo_log is not None
-                    and importo_ultimo_log < importo_penultimo_log
-                    and importo_ultimo_log > 0
-                ):
-                    delta_sec = (data_modifica - data_stampa).total_seconds()
-                    if delta_sec > 60:
-
-                        print(f"[INFO] Salvo documento {record.get('id_documento')} azienda {azienda} (log: {idx+1}) | importo_ultimo_log: {importo_ultimo_log} | importo_penultimo_log: {importo_penultimo_log} | delta_sec: {delta_sec}")
-
-                        nuovo_record = StoricoModificheFatture(
-                            id_documento=record.get('id_documento'),
-                            anno=record.get('anno'),
-                            id_cliente=record.get('id_cliente'),
-                            tipo_doc=record.get('tipo_doc'),
-                            data_doc=record.get('data_doc'),
-                            num_doc=record.get('num_doc'),
-                            tipo_fattura=record.get('tipo_fattura'),
-                            data_fattura=record.get('data_fattura'),
-                            numero_fattura=record.get('numero_fattura'),
-                            tipo_pagamento=record.get('tipo_pagamento'),
-                            id_hst=record.get('id_hst'),
-                            nome_tabella=record.get('nome_tabella'),
-                            utente=record.get('utente'),
-                            tipo_operazione=record.get('tipo_operazione'),
-                            note=record.get('note'),
-                            data_modifica=data_modifica,
-                            data_stampa_fattura=data_stampa,
-                            azienda=azienda,
-                            importo_ultimo_log=importo_ultimo_log,
-                            importo_penultimo_log=importo_penultimo_log
-                        )
-
-                        session.add(nuovo_record)
-                        totale += 1
-
-    session.commit()
-    session.close()
+    session.close()  # Chiude la sessione del database
     print(f"\n[INFO] Tutti i record ({totale}) sono stati inseriti con successo!")
     print("[INFO] Fine script\n")
 
