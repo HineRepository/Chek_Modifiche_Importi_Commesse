@@ -9,6 +9,7 @@
     .table-hover tbody tr:hover { background-color: #f1f3f5; }
     .collapse-row { background: #f8f9fa; }
     .importo-wrap { max-width: 120px; word-break: break-all; white-space: normal; }
+    .diff-rosso { color: #dc3545 !important; font-weight: bold; background: #fff0f0; }
     </style>
 </head>
 <body>
@@ -24,21 +25,18 @@
                     {% endfor %}
                 </select>
             </form>
-            <h5>Utenti e conteggio record</h5>
+            <h5>Statistiche</h5>
             <table class="table table-sm table-bordered mb-0">
                 <thead class="table-light">
-                      <tr><th>Utente</th><th>Numero record</th></tr>
+                      <tr><th>Descrizione</th><th>Valore</th></tr>
                 </thead>
                 <tbody>
-                {% for utente, count in utenti_count.items() %}
-                    <tr><td>{{ utente }}</td><td>{{ count }}</td></tr>
-                {% endfor %}
-                <tr class="table-secondary fw-bold"><td>TOTALE</td><td>{{ totale_record }}</td></tr>
-                <tr class="table-warning fw-bold"><td>Totale soldi: </td><td>{{ '{:,.2f}'.format(totale_soldi_spariti).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
+                <tr class="table-secondary fw-bold"><td>Totale record</td><td>{{ totale_record }}</td></tr>
+                <tr class="table-warning fw-bold"><td>Differenza totale</td><td>{{ '{:,.2f}'.format(totale_differenza).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
                 {% if totali_per_azienda is defined and totali_per_azienda and (not azienda_filtro or azienda_filtro == 'TUTTE') %}
                     <tr><td colspan="2"><strong>Totali per azienda</strong></td></tr>
                     {% for az in totali_per_azienda %}
-                        <tr><td>{{ az.azienda }}</td><td>{{ az.record }} record<br>{{ '{:,.2f}'.format(az.soldi).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
+                        <tr><td>{{ az.azienda }}</td><td>{{ az.record }} record<br>{{ '{:,.2f}'.format(az.differenza).replace(',', ' ').replace('.', ',') }} &euro;</td></tr>
                     {% endfor %}
                 {% endif %}
                 </tbody>
@@ -73,39 +71,41 @@
                 <thead class="table-light">
                     <tr>
                         <th>ID Documento</th>
+                        <th>ID Reg PD</th>
                         <th>Azienda</th>
-                        <th>Importo stampato<br/>in fattura</th>
-                        <th>Importo modificato dopo <br/>la stampa della fattura</th>
-                        <th>Data stampa fattura</th>
-                        <th>Data modifica dopo <br/>la stampa della fattura</th>
+                        <th>Data Trasmissione</th>
+                        <th>Targa</th>
+                        <th>Importo Fattura</th>
+                        <th>Importo Modifica</th>
+                        <th>Differenza</th>
                         <th>Utente</th>
                         <th>Azione</th>
                     </tr>
                 </thead>
                 <tbody>
                 {% for rec in records %}
+                    {% set importo_fatt = rec.importo_fattura|float if rec.importo_fattura else 0.0 %}
+                    {% set importo_mod = rec.importo_modifica|float if rec.importo_modifica else 0.0 %}
+                    {% set diff = importo_fatt - importo_mod %}
                     <tr data-bs-toggle="collapse" data-bs-target="#details{{ rec.id }}" aria-expanded="false" style="cursor:pointer;">
                         <td class="highlight">{{ rec.id_documento }}</td>
+                        <td class="highlight">{{ rec.id_reg_pd }}</td>
                         <td class="highlight">{{ rec.azienda }}</td>
-                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_penultimo_log).replace(',', ' ').replace('.', ',') if rec.importo_penultimo_log is not none else '' }} &euro;</td>
-                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_ultimo_log).replace(',', ' ').replace('.', ',') if rec.importo_ultimo_log is not none else '' }} &euro;</td>
                         <td class="highlight">
-                            {% if rec.data_stampa_fattura %}
-                                {{ rec.data_stampa_fattura.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_stampa_fattura.strftime('%H:%M') }}
+                            {% if rec.data_trasmissione_fattura %}
+                                {{ rec.data_trasmissione_fattura.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_trasmissione_fattura.strftime('%H:%M') }}
                             {% endif %}
                         </td>
-                        <td class="highlight">
-                            {% if rec.data_modifica %}
-                                {{ rec.data_modifica.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_modifica.strftime('%H:%M') }}
-                            {% endif %}
-                        </td>
+                        <td class="highlight">{{ rec.targa if rec.targa else '' }}</td>
+                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_fattura).replace(',', ' ').replace('.', ',') if rec.importo_fattura is not none else '0,00' }} &euro;</td>
+                        <td class="highlight importo-wrap">{{ '{:,.2f}'.format(rec.importo_modifica).replace(',', ' ').replace('.', ',') if rec.importo_modifica is not none else '0,00' }} &euro;</td>
+                        <td class="highlight importo-wrap{% if importo_fatt > importo_mod %} diff-rosso{% endif %}">{{ '{:,.2f}'.format(diff).replace(',', ' ').replace('.', ',') }} &euro;</td>
                         <td class="highlight">{{ rec.utente }}</td>
                         <td><span class="badge bg-info">Dettagli</span></td>
                     </tr>
                     <tr class="collapse collapse-row" id="details{{ rec.id }}">
-                        <td colspan="8">
+                        <td colspan="10">
                             <div>
-                                <strong>Azienda:</strong> {{ rec.azienda }}<br>
                                 <strong>Anno:</strong> {{ rec.anno }}<br>
                                 <strong>ID Cliente:</strong> {{ rec.id_cliente }}<br>
                                 <strong>Tipo Doc:</strong> {{ rec.tipo_doc }}<br>
@@ -119,10 +119,10 @@
                                 <strong>Nome Tabella:</strong> {{ rec.nome_tabella }}<br>
                                 <strong>Tipo Operazione:</strong> {{ rec.tipo_operazione }}<br>
                                 <strong>Note:</strong> {{ rec.note }}<br>
-                                <strong>Importo Ultimo Log:</strong> {{ rec.importo_ultimo_log }} &euro;<br>
-                                <strong>Importo Penultimo Log:</strong> {{ rec.importo_penultimo_log }} &euro;<br>
-                                <strong>Data Modifica:</strong> {{ rec.data_modifica }}<br>
-                                <strong>Data Stampa Fattura:</strong> {{ rec.data_stampa_fattura }}<br>
+                                <strong>Data Modifica:</strong> 
+                                {% if rec.data_modifica %}
+                                    {{ rec.data_modifica.strftime('%d-%m-%Y') }}&nbsp;-&nbsp;{{ rec.data_modifica.strftime('%H:%M') }}
+                                {% endif %}
                             </div>
                         </td>
                     </tr>

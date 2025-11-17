@@ -6,10 +6,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from models import StoricoModificheFatture, Base
 from datetime import datetime, date
+import json
+import os
 
 # Carica la configurazione
 config = configparser.ConfigParser()
 config.read('config.ini')
+
+CHECKPOINT_FILE = 'checkpoint.json'
 
 # Connessione SQL Server
 sqlserver_conf = config['SQLSERVER']
@@ -49,12 +53,12 @@ def extract_importo_from_xml(xml_content):
     Logica:
     - Prende il valore di <ImportoTotaleDocumento> (importo totale della fattura)
     - Sottrae la somma delle righe <DettaglioLinee> che hanno <Descrizione> contenente 'Spesa Materiale consumo'.
-      (Queste sono spese che vanno escluse dal totale per ottenere l'importo "vero" della commessa)
+    - Sottrae anche l'IVA relativa a queste righe (se presente), per replicare il calcolo manuale dell'utente.
     - Restituisce il risultato arrotondato a due decimali.
     Parametri:
         xml_content: stringa XML (o bytes) della fattura elettronica
     Ritorna:
-        float: importo effettivo (ImportoTotaleDocumento - somma Spesa Materiale consumo), oppure None se errore
+        float: importo effettivo (ImportoTotaleDocumento - somma Spesa Materiale consumo - IVA relativa), oppure None se errore
     """
     if not xml_content or not isinstance(xml_content, (str, bytes)):
         return None
@@ -71,15 +75,25 @@ def extract_importo_from_xml(xml_content):
         # Cerca tutte le righe <DettaglioLinee> e somma i valori di <PrezzoTotale>
         # solo se la <Descrizione> contiene 'Spesa Materiale consumo'
         spesa_materiale = 0.0
+        iva_materiale = 0.0
         for dettaglio in root.findall('.//DettaglioLinee'):
             descrizione = dettaglio.find('Descrizione')
             if descrizione is not None and 'Spesa Materiale consumo' in descrizione.text:
                 prezzo_totale = dettaglio.find('PrezzoTotale')
+                aliquota_iva = dettaglio.find('AliquotaIVA')
                 if prezzo_totale is not None:
-                    spesa_materiale += float(prezzo_totale.text)
-        # Calcola l'importo effettivo: totale - spese materiale consumo
-        risultato = round(importo_totale_val - spesa_materiale, 2)
-        print(f"[DEBUG XML] ImportoTotale={importo_totale_val}, SpesaMateriale={spesa_materiale}, Risultato={risultato}")
+                    valore = float(prezzo_totale.text)
+                    spesa_materiale += valore
+                    # Calcola l'IVA di questa riga se presente
+                    if aliquota_iva is not None:
+                        try:
+                            iva = valore * float(aliquota_iva.text) / 100.0
+                            iva_materiale += iva
+                        except Exception:
+                            pass
+        # Calcola l'importo effettivo: totale - spese materiale consumo - iva materiale consumo
+        risultato = round(importo_totale_val - spesa_materiale - iva_materiale, 2)
+        print(f"[DEBUG XML] ImportoTotale={importo_totale_val}, SpesaMateriale={spesa_materiale}, IVA_Materiale={iva_materiale}, Risultato={risultato}")
         return risultato
     except Exception as e:
         print(f"[WARNING] Errore nel parsing XML: {e}")
@@ -104,8 +118,21 @@ def get_fattura_data(odbc_conn_str, id_reg_pd):
                 # La query restituisce: id_reg_pd, fine_trasmissione, nome_file, file_xml_vendita
                 data_trasmissione = row[1]  # fine_trasmissione (datetime)
                 xml_content = row[3]  # file_xml_vendita (XML string)
+                print(f"[DEBUG] id_reg_pd {id_reg_pd}: data_trasmissione={data_trasmissione}")
+                if xml_content is None:
+                    print(f"[DEBUG] id_reg_pd {id_reg_pd}: xml_content è None!")
+                elif isinstance(xml_content, bytes):
+                    print(f"[DEBUG] id_reg_pd {id_reg_pd}: xml_content è bytes, len={len(xml_content)}")
+                elif isinstance(xml_content, str):
+                    print(f"[DEBUG] id_reg_pd {id_reg_pd}: xml_content è str, len={len(xml_content)}")
+                else:
+                    print(f"[DEBUG] id_reg_pd {id_reg_pd}: xml_content tipo sconosciuto: {type(xml_content)}")
+                # Mostra un estratto dei primi 200 caratteri
+                if xml_content:
+                    anteprima = xml_content[:200] if isinstance(xml_content, (str, bytes)) else str(xml_content)[:200]
+                    print(f"[DEBUG] id_reg_pd {id_reg_pd}: xml_content anteprima: {anteprima}")
                 importo_fattura = extract_importo_from_xml(xml_content)
-                print(f"[DEBUG] id_reg_pd {id_reg_pd}: data_trasmissione={data_trasmissione}, importo_fattura={importo_fattura}")
+                print(f"[DEBUG] id_reg_pd {id_reg_pd}: importo_fattura={importo_fattura}")
                 return data_trasmissione, importo_fattura
             else:
                 print(f"[DEBUG] id_reg_pd {id_reg_pd}: Nessun risultato dalla query (fattura non trasmessa?)")
@@ -149,10 +176,18 @@ def main():
     - Per ogni log, recupera la data di trasmissione e l'importo fattura dal file XML associato.
     - Salva nel database tutti i dati rilevanti, compresi importi log, importo fattura, targa, ecc.
     - Stampa dettagliate informazioni di debug per ogni step.
+    - Usa un checkpoint JSON per riprendere in caso di interruzione.
 
     Dipendenze: pyodbc, sqlalchemy, configparser
     Configurazione: vedi config.ini per parametri di connessione.
     """
+    # Carica checkpoint se esiste
+    checkpoint = {}
+    if os.path.exists(CHECKPOINT_FILE):
+        with open(CHECKPOINT_FILE, 'r') as f:
+            checkpoint = json.load(f)
+        print(f"[INFO] Checkpoint caricato: {checkpoint}")
+    
     # Avvio script e creazione sessione DB
     print("[INFO] Avvio script di estrazione e salvataggio dati\n")
     session = Session()  # Crea una nuova sessione SQLAlchemy per il database
@@ -162,13 +197,35 @@ def main():
 
     # Ciclo su ogni DSN (azienda/sorgente)
     for dsn_str in dsn_list:
+        azienda_name = dsn_str.split('^')[0]
+        
+        # Recupera l'ultimo id_documento processato per questa azienda
+        last_id_documento = checkpoint.get(azienda_name, 0)
+        
         print(f"[INFO] Inizio elaborazione per DSN: {dsn_str}")
+        if last_id_documento > 0:
+            print(f"[INFO] Ripresa da id_documento > {last_id_documento}")
 
         records = estrai_dati_da_dsn(dsn_str)  # Estrae tutti i log per questo DSN (azienda)
         print(f"[DEBUG] Numero record estratti da DSN {dsn_str}: {len(records)}")
         for idx, (azienda, odbc_conn_str, record) in enumerate(records):
             # Stampa info base su ogni record
             print(f"[DEBUG] [{idx+1}/{len(records)}] id_documento={record.get('id_documento')} id_reg_pd={record.get('id_reg_pd')}")
+            
+            # Salta record già processati (checkpoint)
+            id_documento_current = record.get('id_documento')
+            if id_documento_current <= last_id_documento:
+                continue
+            
+            # Filtro anno in Python: CV dal 2024, altri dal 2025
+            anno = record.get('anno')
+            if azienda == 'CV':
+                if anno is not None and int(anno) < 2024:
+                    continue
+            else:
+                if anno is not None and int(anno) < 2025:
+                    continue
+            
             id_reg_pd = record.get('id_reg_pd')
             # Verifica che la commessa sia stata fatturata (id_reg_pd > 0)
             if not id_reg_pd or id_reg_pd <= 0:
@@ -209,6 +266,14 @@ def main():
             if data_modifica >= data_trasmissione:
                 print(f"[DEBUG]   -> SKIP: data_modifica >= data_trasmissione ({data_modifica} >= {data_trasmissione})")
                 continue
+            # Filtro anno in Python: CV dal 2024, altri dal 2025
+            anno = record.get('anno')
+            if azienda == 'CV':
+                if anno is not None and int(anno) < 2024:
+                    continue
+            else:
+                if anno is not None and int(anno) < 2025:
+                    continue
             # Estrai importo log dalle note
             importo_log = extract_importo(record.get('note'))
             if importo_log is None:
@@ -240,12 +305,35 @@ def main():
                 data_trasmissione_fattura=data_trasmissione,
                 targa=record.get('targa')
             )
+            # Salta se il record è già presente (stesso id_documento, id_reg_pd, azienda, data_modifica)
+            exists = session.query(StoricoModificheFatture).filter_by(
+                id_documento=record.get('id_documento'),
+                id_reg_pd=id_reg_pd,
+                azienda=azienda,
+                data_modifica=data_modifica
+            ).first()
+            if exists:
+                print(f"[DEBUG]   -> SKIP: record già presente in DB (id_documento={record.get('id_documento')}, id_reg_pd={id_reg_pd}, azienda={azienda}, data_modifica={data_modifica})")
+                continue
             session.add(nuovo_record)  # Aggiunge il record alla sessione
-            session.commit()           # Salva subito il record nel database
-            print("[DEBUG] Commit eseguito per questo record")
+            session.commit()  # Commit immediato per ogni record
             totale += 1  # Incrementa il contatore dei record salvati
+            
+            # Aggiorna checkpoint dopo ogni record salvato
+            checkpoint[azienda_name] = id_documento_current
+            with open(CHECKPOINT_FILE, 'w') as f:
+                json.dump(checkpoint, f, indent=2)
+        
+        # Azienda completata
+        print(f"[INFO] Azienda {azienda_name} completata")
 
     session.close()  # Chiude la sessione del database
+    
+    # Rimuove il checkpoint alla fine (successo completo)
+    if os.path.exists(CHECKPOINT_FILE):
+        os.remove(CHECKPOINT_FILE)
+        print(f"[INFO] Checkpoint rimosso: elaborazione completata")
+    
     print(f"\n[INFO] Tutti i record ({totale}) sono stati inseriti con successo!")
     print("[INFO] Fine script\n")
 

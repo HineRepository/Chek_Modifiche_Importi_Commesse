@@ -32,46 +32,60 @@ def index():
     query = session.query(StoricoModificheFatture)
     if azienda_filtro and azienda_filtro != 'TUTTE':
         query = query.filter(StoricoModificheFatture.azienda == azienda_filtro)
-    records = query.order_by(StoricoModificheFatture.id.desc()).all()
-    # Calcola il conteggio dei record per utente
-    utenti_count = {}
-    totale_soldi_spariti = 0.0
+    all_records = query.order_by(StoricoModificheFatture.data_modifica.desc()).all()
+    
+    # Raggruppa per id_documento e prendi solo l'ultimo (più recente)
+    records_dict = {}
+    for rec in all_records:
+        id_doc = rec.id_documento
+        if id_doc not in records_dict:
+            records_dict[id_doc] = rec
+    
+    records = list(records_dict.values())
+    
+    # Calcola statistiche
+    totale_record = len(records)
+    totale_differenza = 0.0
     for rec in records:
-        utente = rec.utente or 'N/D'
-        utenti_count[utente] = utenti_count.get(utente, 0) + 1
         try:
-            if rec.importo_penultimo_log is not None and rec.importo_ultimo_log is not None:
-                diff = float(rec.importo_penultimo_log) - float(rec.importo_ultimo_log)
-                if diff > 0:
-                    totale_soldi_spariti += diff
+            if rec.importo_fattura is not None and rec.importo_modifica is not None:
+                diff = float(rec.importo_fattura) - float(rec.importo_modifica)
+                if diff > 0.05:
+                    totale_differenza += diff
         except Exception:
             pass
-    totale_record = sum(utenti_count.values())
+    
     # Totali per azienda (solo se nessun filtro attivo)
     totali_per_azienda = []
     if not azienda_filtro or azienda_filtro == 'TUTTE':
         for az in aziende:
             if not az:
                 continue
-            recs_az = [r for r in session.query(StoricoModificheFatture).filter(StoricoModificheFatture.azienda == az).all()]
+            recs_az_all = [r for r in session.query(StoricoModificheFatture).filter(StoricoModificheFatture.azienda == az).order_by(StoricoModificheFatture.data_modifica.desc()).all()]
+            # Raggruppa per id_documento
+            recs_az_dict = {}
+            for r in recs_az_all:
+                if r.id_documento not in recs_az_dict:
+                    recs_az_dict[r.id_documento] = r
+            recs_az = list(recs_az_dict.values())
             count_az = len(recs_az)
-            soldi_az = 0.0
+            diff_az = 0.0
             for r in recs_az:
                 try:
-                    if r.importo_penultimo_log is not None and r.importo_ultimo_log is not None:
-                        diff = float(r.importo_penultimo_log) - float(r.importo_ultimo_log)
-                        if diff > 0:
-                            soldi_az += diff
+                    if r.importo_fattura is not None and r.importo_modifica is not None:
+                        diff = float(r.importo_fattura) - float(r.importo_modifica)
+                        if diff > 0.05:
+                            diff_az += diff
                 except Exception:
                     pass
-            totali_per_azienda.append({'azienda': az, 'record': count_az, 'soldi': soldi_az})
+            totali_per_azienda.append({'azienda': az, 'record': count_az, 'differenza': diff_az})
+    
     session.close()
     return render_template(
         'index.html',
         records=records,
-        utenti_count=utenti_count,
         totale_record=totale_record,
-        totale_soldi_spariti=totale_soldi_spariti,
+        totale_differenza=totale_differenza,
         aziende=aziende,
         azienda_filtro=azienda_filtro,
         totali_per_azienda=totali_per_azienda
@@ -109,86 +123,72 @@ def export():
     session = Session()
     records = session.query(StoricoModificheFatture).order_by(StoricoModificheFatture.id.desc()).all()
     session.close()
-    # Colonne come nella tabella index
+    
+    # Colonne per la nuova visualizzazione
     columns = [
         'ID Documento',
+        'ID Reg PD',
         'Azienda',
-        'Anno',
-        'Importo stampato in fattura',
-        'Importo modificato dopo la stampa della fattura',
-        'Data stampa fattura',
-        'Data modifica dopo la stampa della fattura',
-        'Utente'
+        'Data Trasmissione Fattura',
+        'Targa',
+        'Importo Fattura',
+        'Importo Ultima Modifica',
+        'Differenza',
+        'Utente',
+        'Data Modifica'
     ]
+    
     data = []
     for rec in records:
+        importo_fattura = rec.importo_fattura if rec.importo_fattura is not None else 0.0
+        importo_modifica = rec.importo_modifica if rec.importo_modifica is not None else 0.0
+        differenza = importo_fattura - importo_modifica
+        
         data.append({
             'ID Documento': rec.id_documento,
+            'ID Reg PD': rec.id_reg_pd or '',
             'Azienda': rec.azienda or '',
-            'Anno': rec.anno or '',
-            'Importo stampato in fattura': f"{rec.importo_penultimo_log} €" if rec.importo_penultimo_log is not None else '',
-            'Importo modificato dopo la stampa della fattura': f"{rec.importo_ultimo_log} €" if rec.importo_ultimo_log is not None else '',
-            'Data stampa fattura': f"{rec.data_stampa_fattura.strftime('%d-%m-%Y')} - {rec.data_stampa_fattura.strftime('%H:%M')}" if rec.data_stampa_fattura else '',
-            'Data modifica dopo la stampa della fattura': f"{rec.data_modifica.strftime('%d-%m-%Y')} - {rec.data_modifica.strftime('%H:%M')}" if rec.data_modifica else '',
-            'Utente': rec.utente or ''
+            'Data Trasmissione Fattura': rec.data_trasmissione_fattura.strftime('%d-%m-%Y %H:%M') if rec.data_trasmissione_fattura else '',
+            'Targa': rec.targa or '',
+            'Importo Fattura': f"{importo_fattura:.2f} €",
+            'Importo Ultima Modifica': f"{importo_modifica:.2f} €",
+            'Differenza': f"{differenza:.2f} €",
+            'Utente': rec.utente or '',
+            'Data Modifica': rec.data_modifica.strftime('%d-%m-%Y %H:%M') if rec.data_modifica else ''
         })
+    
     df = pd.DataFrame(data, columns=columns)
     output = io.StringIO()
     df.to_csv(output, index=False, sep=';')
+    
     # Riga vuota
     output.write('\n')
-    # Tabella utenti per azienda
-    utenti_per_azienda = {}
-    totale_soldi_spariti = 0.0
+    
+    # Statistiche per azienda
+    output.write('Azienda;Numero Record;Differenza Totale\n')
+    aziende_stats = {}
     for rec in records:
         azienda = rec.azienda or 'N/D'
-        utente = rec.utente or 'N/D'
-        if azienda not in utenti_per_azienda:
-            utenti_per_azienda[azienda] = {}
-        utenti_per_azienda[azienda][utente] = utenti_per_azienda[azienda].get(utente, 0) + 1
+        if azienda not in aziende_stats:
+            aziende_stats[azienda] = {'count': 0, 'diff': 0.0}
+        aziende_stats[azienda]['count'] += 1
         try:
-            if rec.importo_penultimo_log is not None and rec.importo_ultimo_log is not None:
-                diff = float(rec.importo_penultimo_log) - float(rec.importo_ultimo_log)
+            if rec.importo_fattura is not None and rec.importo_modifica is not None:
+                diff = float(rec.importo_fattura) - float(rec.importo_modifica)
                 if diff > 0:
-                    totale_soldi_spariti += diff
+                    aziende_stats[azienda]['diff'] += diff
         except Exception:
             pass
     
-    # Scrivi utenti per azienda
-    for azienda in sorted(utenti_per_azienda.keys()):
-        output.write(f'Azienda: {azienda}\n')
-        output.write('Utente;Numero record\n')
-        utenti_azienda = utenti_per_azienda[azienda]
-        totale_azienda = sum(utenti_azienda.values())
-        for utente, count in utenti_azienda.items():
-            output.write(f'{utente};{count}\n')
-        output.write(f'TOTALE {azienda};{totale_azienda}\n')
-        output.write('\n')
+    for azienda in sorted(aziende_stats.keys()):
+        stats = aziende_stats[azienda]
+        output.write(f'{azienda};{stats["count"]};{stats["diff"]:.2f} €\n')
     
     # Totale generale
-    totale_record = sum(sum(utenti.values()) for utenti in utenti_per_azienda.values())
-    output.write(f'TOTALE GENERALE;{totale_record}\n')
-    output.write(f'Totale soldi mancanti;{totale_soldi_spariti:.2f} €\n')
-    # Riga vuota
-    output.write('\n')
-    # Tabella aziende
-    output.write('Azienda;Numero record;Soldi mancanti\n')
-    aziende_count = {}
-    aziende_soldi = {}
-    for rec in records:
-        azienda = rec.azienda or 'N/D'
-        aziende_count[azienda] = aziende_count.get(azienda, 0) + 1
-        try:
-            if rec.importo_penultimo_log is not None and rec.importo_ultimo_log is not None:
-                diff = float(rec.importo_penultimo_log) - float(rec.importo_ultimo_log)
-                if diff > 0:
-                    aziende_soldi[azienda] = aziende_soldi.get(azienda, 0.0) + diff
-        except Exception:
-            pass
-    for azienda in sorted(aziende_count.keys()):
-        count = aziende_count[azienda]
-        soldi = aziende_soldi.get(azienda, 0.0)
-        output.write(f'{azienda};{count};{soldi:.2f} €\n')
+    totale_record = sum(s['count'] for s in aziende_stats.values())
+    totale_diff = sum(s['diff'] for s in aziende_stats.values())
+    output.write(f'TOTALE GENERALE;{totale_record};{totale_diff:.2f} €\n')
+    
     output.seek(0)
     return send_file(
         io.BytesIO(output.getvalue().encode('utf-8-sig')),
