@@ -175,7 +175,7 @@ def main():
     - Estrae i log delle modifiche da Infinity tramite query SQL.
     - Per ogni log, recupera la data di trasmissione e l'importo fattura dal file XML associato.
     - Salva nel database tutti i dati rilevanti, compresi importi log, importo fattura, targa, ecc.
-    - Stampa dettagliate informazioni di debug per ogni step.
+    - Stampa dettagliate informazioni di debug per ogni step. 
     - Usa un checkpoint JSON per riprendere in caso di interruzione.
 
     Dipendenze: pyodbc, sqlalchemy, configparser
